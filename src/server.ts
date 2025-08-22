@@ -15,8 +15,16 @@ app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
 app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 
-ensureKeyHashes().then(() => {
-  app.listen(CONFIG.port, () =>
-    console.log(`referrals api listening on :${CONFIG.port}`)
-  );
+// Start server first so /health is available, then seed keys in the background
+const server = app.listen(CONFIG.port, () => {
+  console.log(`referrals api listening on :${CONFIG.port}`);
 });
+
+(async () => {
+  try {
+    await ensureKeyHashes();
+    console.log('API keys ensured');
+  } catch (err) {
+    console.error('ensureKeyHashes failed (will not crash server):', err);
+  }
+})();
