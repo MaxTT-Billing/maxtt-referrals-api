@@ -15,16 +15,12 @@ app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
 app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 
-// Start server first so /health is available, then seed keys in the background
-const server = app.listen(CONFIG.port, () => {
+// Start HTTP first so /health is available even if DB is warming up
+app.listen(CONFIG.port, () => {
   console.log(`referrals api listening on :${CONFIG.port}`);
 });
 
+// Seed API keys in the background (non-fatal on error)
 (async () => {
-  try {
-    await ensureKeyHashes();
-    console.log('API keys ensured');
-  } catch (err) {
-    console.error('ensureKeyHashes failed (will not crash server):', err);
-  }
+  await ensureKeyHashes();
 })();
