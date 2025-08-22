@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import { CONFIG } from './config.js';
@@ -11,7 +11,7 @@ app.use(helmet());
 app.use(express.json());
 app.use(cors({ origin: CONFIG.cors }));
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
 app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 
@@ -20,4 +20,3 @@ ensureKeyHashes().then(() => {
     console.log(`referrals api listening on :${CONFIG.port}`)
   );
 });
-
