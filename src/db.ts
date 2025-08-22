@@ -6,3 +6,4 @@ export const pool = new pg.Pool({
   max: 10,
 });
 add db.ts (Postgres pool)
+});
