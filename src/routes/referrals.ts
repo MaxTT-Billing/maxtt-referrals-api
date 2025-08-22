@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { pool } from '../db.js';
 import { computeReward } from '../lib/reward.js';
 import { z } from 'zod';
@@ -16,8 +16,9 @@ const postSchema = z.object({
 
 router.post(
   '/',
-  (req, res, next) => requireRole(req, res, next, ['writer', 'admin', 'sa']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['writer', 'admin', 'sa']),
+  async (req: Request, res: Response) => {
     const parsed = postSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -54,8 +55,9 @@ router.post(
 
 router.get(
   '/',
-  (req, res, next) => requireRole(req, res, next, ['admin', 'sa']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['admin', 'sa']),
+  async (req: Request, res: Response) => {
     const month = String(req.query.month ?? '').trim(); // YYYY-MM
     try {
       if (month) {
@@ -78,8 +80,9 @@ router.get(
 
 router.get(
   '/summary/:franchiseeOrCustomer',
-  (req, res, next) => requireRole(req, res, next, ['admin', 'sa']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['admin', 'sa']),
+  async (req: Request, res: Response) => {
     const id = req.params.franchiseeOrCustomer;
     const month = String(req.query.month ?? '').trim();
     const where = id.startsWith('MAXTT-') ? 'franchisee_code = $1' : 'referrer_customer_code = $1';
