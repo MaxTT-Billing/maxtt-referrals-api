@@ -1,16 +1,13 @@
 import pg from 'pg';
 import { CONFIG } from './config.js';
 
-// Decide SSL based on DATABASE_URL
 function wantsSSL(dbUrl: string): boolean {
   try {
     const u = new URL(dbUrl);
-    const host = u.hostname || '';
     const sslmode = u.searchParams.get('sslmode');
     if (sslmode === 'require') return true;
-    if (host.includes('.internal')) return false;
-    if (host.endsWith('render.com')) return true;
-    return false;
+    // Be conservative: managed hosts almost always need TLS
+    return true;
   } catch {
     return true;
   }
@@ -19,5 +16,8 @@ function wantsSSL(dbUrl: string): boolean {
 export const pool = new pg.Pool({
   connectionString: CONFIG.dbUrl,
   max: 10,
-  ssl: wantsSSL(CONFIG.dbUrl) ? { rejectUnauthorized: false } : undefined
+  ssl: wantsSSL(CONFIG.dbUrl) ? { rejectUnauthorized: false } : undefined,
+  keepAlive: true,
+  connectionTimeoutMillis: 15000,
+  idleTimeoutMillis: 30000
 });
