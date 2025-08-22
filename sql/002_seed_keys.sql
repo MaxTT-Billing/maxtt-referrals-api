@@ -1,4 +1,4 @@
--- Optional: if you want to pre-seed placeholders (they'll be overwritten by ensureKeyHashes at runtime)
+-- Optional one-time seeds; runtime will overwrite with fresh hashes via ensureKeyHashes()
 insert into api_keys (name, key_hash, role)
 values
   ('billing-writer', '$2a$10$placeholderplaceholderplaceholderpl', 'writer'),
