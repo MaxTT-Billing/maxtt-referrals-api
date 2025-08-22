@@ -1,0 +1,7 @@
+-- Optional: if you want to pre-seed placeholders (they'll be overwritten by ensureKeyHashes at runtime)
+insert into api_keys (name, key_hash, role)
+values
+  ('billing-writer', '$2a$10$placeholderplaceholderplaceholderpl', 'writer'),
+  ('admin-ui',       '$2a$10$placeholderplaceholderplaceholderpl', 'admin'),
+  ('sa',             '$2a$10$placeholderplaceholderplaceholderpl', 'sa')
+on conflict (name) do nothing;
