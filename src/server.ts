@@ -8,6 +8,7 @@ import referrals from './routes/referrals.js';
 import exportsRouter from './routes/exports.js';
 import debugRouter from './routes/debug.js';
 import adminRouter from './routes/admin.js';
+import dbinfoRouter from './routes/dbinfo.js'; // <-- add
 
 const app = express();
 app.use(helmet());
@@ -19,13 +20,12 @@ app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 app.use('/debug', debugRouter);
 app.use('/admin', adminRouter);
+app.use('/dbinfo', dbinfoRouter); // <-- add
 
-// Start HTTP first so /health is available even if DB is warming up
 app.listen(CONFIG.port, () => {
   console.log(`referrals api listening on :${CONFIG.port}`);
 });
 
-// Background bootstrap (won't crash server if DB hiccups)
 (async () => {
   await ensureSchema();
   await ensureKeyHashes();
