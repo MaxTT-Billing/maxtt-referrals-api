@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { pool } from './db.js';
 import { CONFIG } from './config.js';
+import { Request, Response, NextFunction } from 'express';
 
 // Seed/refresh hashed API keys in the DB at startup
 export async function ensureKeyHashes() {
@@ -22,8 +23,13 @@ export async function ensureKeyHashes() {
   }
 }
 
-// Express middleware: require one of the allowed roles
-export async function requireRole(req: any, res: any, next: any, roles: string[]) {
+// Express middleware helper: require one of the allowed roles
+export async function requireRole(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  roles: string[]
+) {
   try {
     const k = req.header('X-REF-API-KEY');
     if (!k) return res.status(401).json({ error: 'missing api key' });
@@ -37,8 +43,7 @@ export async function requireRole(req: any, res: any, next: any, roles: string[]
       }
     }
     return res.status(401).json({ error: 'invalid api key' });
-  } catch (e) {
+  } catch {
     return res.status(500).json({ error: 'auth error' });
   }
 }
-
