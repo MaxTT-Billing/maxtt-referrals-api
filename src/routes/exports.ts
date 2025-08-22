@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { pool } from '../db.js';
 import { requireRole } from '../auth.js';
 
@@ -6,8 +6,9 @@ const router = Router();
 
 router.post(
   '/request',
-  (req, res, next) => requireRole(req, res, next, ['admin']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['admin']),
+  async (req: Request, res: Response) => {
     const { month, requested_by } = req.body || {};
     if (!month || !requested_by) return res.status(400).json({ error: 'month and requested_by required' });
     const { rows } = await pool.query(
@@ -20,8 +21,9 @@ router.post(
 
 router.post(
   '/decide',
-  (req, res, next) => requireRole(req, res, next, ['sa']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['sa']),
+  async (req: Request, res: Response) => {
     const { id, approve } = req.body || {};
     if (!id) return res.status(400).json({ error: 'id required' });
     const status = approve ? 'approved' : 'rejected';
@@ -35,8 +37,9 @@ router.post(
 
 router.get(
   '/download',
-  (req, res, next) => requireRole(req, res, next, ['admin', 'sa']),
-  async (req, res) => {
+  (req: Request, res: Response, next: NextFunction) =>
+    requireRole(req, res, next, ['admin', 'sa']),
+  async (req: Request, res: Response) => {
     const month = String(req.query.month ?? '');
     const { rows } = await pool.query(
       `select status from export_requests where month=$1 order by id desc limit 1`,
