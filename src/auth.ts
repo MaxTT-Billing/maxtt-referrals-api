@@ -1,29 +1,44 @@
 import bcrypt from 'bcryptjs';
 import { pool } from './db.js';
 import { CONFIG } from './config.js';
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
-// Seed/refresh hashed API keys in the DB at startup
-export async function ensureKeyHashes() {
-  const roles = [
-    { name: 'billing-writer', key: CONFIG.rawKeys.writer, role: 'writer' },
-    { name: 'admin-ui',       key: CONFIG.rawKeys.admin,  role: 'admin'  },
-    { name: 'sa',             key: CONFIG.rawKeys.sa,     role: 'sa'     }
-  ];
+// Create api_keys if needed, then upsert hashes.
+// Any error is logged but not thrown so the server keeps running.
+export async function ensureKeyHashes(): Promise<void> {
+  try {
+    await pool.query(`
+      create table if not exists api_keys (
+        id bigserial primary key,
+        name text not null unique,
+        key_hash text not null,
+        role text not null check (role in ('writer','admin','sa')),
+        created_at timestamptz not null default now()
+      )
+    `);
 
-  for (const r of roles) {
-    const hash = await bcrypt.hash(r.key, 10);
-    await pool.query(
-      `insert into api_keys (name, key_hash, role)
-       values ($1,$2,$3)
-       on conflict (name) do update
-       set key_hash = excluded.key_hash, role = excluded.role`,
-      [r.name, hash, r.role]
-    );
+    const roles = [
+      { name: 'billing-writer', key: CONFIG.rawKeys.writer, role: 'writer' },
+      { name: 'admin-ui',       key: CONFIG.rawKeys.admin,  role: 'admin'  },
+      { name: 'sa',             key: CONFIG.rawKeys.sa,     role: 'sa'     }
+    ];
+
+    for (const r of roles) {
+      const hash = await bcrypt.hash(r.key, 10);
+      await pool.query(
+        `insert into api_keys (name, key_hash, role)
+         values ($1,$2,$3)
+         on conflict (name) do update
+           set key_hash = excluded.key_hash, role = excluded.role`,
+        [r.name, hash, r.role]
+      );
+    }
+    console.log('API keys ensured');
+  } catch (err) {
+    console.error('ensureKeyHashes skipped:', err);
   }
 }
 
-// Express middleware helper: require one of the allowed roles
 export async function requireRole(
   req: Request,
   res: Response,
