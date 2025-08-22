@@ -5,4 +5,3 @@ export const pool = new pg.Pool({
   connectionString: CONFIG.dbUrl,
   max: 10,
 });
-
