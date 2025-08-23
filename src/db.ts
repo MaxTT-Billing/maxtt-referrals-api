@@ -6,8 +6,7 @@ function wantsSSL(dbUrl: string): boolean {
     const u = new URL(dbUrl);
     const sslmode = u.searchParams.get('sslmode');
     if (sslmode === 'require') return true;
-    // Be conservative: managed hosts almost always need TLS
-    return true;
+    return true; // be conservative for managed hosts
   } catch {
     return true;
   }
