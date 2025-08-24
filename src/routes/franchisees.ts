@@ -1,6 +1,12 @@
 import { Router } from 'express';
-import { pool } from '../db.js';            // keep .js extension
-import { requireRole } from '../auth.js';   // keep .js extension
+import { pool } from '../db.js';              // keep .js extension
+import { requireRole as requireRoleRaw } from '../auth.js'; // keep .js extension
+
+// Adapter: turn requireRole(role, req, res, next) into Express middleware fn
+const requireRole =
+  (role: 'writer' | 'admin' | 'sa') =>
+  (req: any, res: any, next: any) =>
+    (requireRoleRaw as any)(role, req, res, next);
 
 const router = Router();
 
