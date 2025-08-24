@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { pool } from '../db.js';              // keep .js extension
-import { requireRole as requireRoleRaw } from '../auth.js'; // keep .js extension
+import { pool } from '../db.js';
+import { requireRole as requireRoleRaw } from '../auth.js';
 
-// Adapter: turn requireRole(role, req, res, next) into Express middleware fn
+// Adapter: your requireRole(role, req, res, next) -> proper Express middleware
 const requireRole =
   (role: 'writer' | 'admin' | 'sa') =>
   (req: any, res: any, next: any) =>
@@ -14,13 +14,15 @@ const router = Router();
  * SA-only: one-time initializer
  * - creates franchisees table if missing
  * - seeds from existing referrals
- * - adds FK (NOT VALID → VALIDATE)
+ * - adds FK by checking pg_constraint (no DO $$ block)
  */
 router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = '10s'`);
 
+    // 1) Table
     await client.query(`
       CREATE TABLE IF NOT EXISTS public.franchisees (
         code           TEXT PRIMARY KEY,
@@ -32,12 +34,13 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       );
     `);
 
+    // 2) Index
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_franchisees_active
       ON public.franchisees(active);
     `);
 
-    // Seed any missing franchisees from referrals
+    // 3) Seed from referrals
     await client.query(`
       INSERT INTO public.franchisees (code, name)
       SELECT DISTINCT r.franchisee_code, r.franchisee_code
@@ -46,32 +49,29 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       WHERE r.franchisee_code IS NOT NULL AND f.code IS NULL;
     `);
 
-    // Add FK if it doesn't exist yet (safe)
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM information_schema.table_constraints
-          WHERE table_name = 'referrals'
-            AND constraint_type = 'FOREIGN KEY'
-            AND constraint_name = 'referrals_franchisee_code_fkey'
-        ) THEN
-          ALTER TABLE public.referrals
-            ADD CONSTRAINT referrals_franchisee_code_fkey
-            FOREIGN KEY (franchisee_code)
-            REFERENCES public.franchisees(code)
-            ON UPDATE CASCADE
-            ON DELETE RESTRICT
-            NOT VALID;
-          ALTER TABLE public.referrals VALIDATE CONSTRAINT referrals_franchisee_code_fkey;
-        END IF;
-      END
-      $$;
+    // 4) FK (conditional, no DO $$)
+    const fkCheck = await client.query(`
+      SELECT 1
+      FROM pg_constraint
+      WHERE conname = 'referrals_franchisee_code_fkey'
     `);
+    let fkAdded = false;
+    if (fkCheck.rowCount === 0) {
+      await client.query(`
+        ALTER TABLE public.referrals
+          ADD CONSTRAINT referrals_franchisee_code_fkey
+          FOREIGN KEY (franchisee_code)
+          REFERENCES public.franchisees(code)
+          ON UPDATE CASCADE
+          ON DELETE RESTRICT
+          NOT VALID;
+      `);
+      await client.query(`ALTER TABLE public.referrals VALIDATE CONSTRAINT referrals_franchisee_code_fkey;`);
+      fkAdded = true;
+    }
 
     await client.query('COMMIT');
-    res.json({ ok: true, note: 'franchisees table ensured, seeded, FK validated' });
+    res.json({ ok: true, note: 'franchisees ensured & seeded', fk_added: fkAdded });
   } catch (e: any) {
     await client.query('ROLLBACK');
     res.status(500).json({ ok: false, where: 'init', message: e?.message || String(e) });
