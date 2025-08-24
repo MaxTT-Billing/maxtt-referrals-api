@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { pool } from '../db';
-import { requireRole } from '../auth';
+import { pool } from '../db.js';            // ⬅️ note the .js
+import { requireRole } from '../auth.js';   // ⬅️ note the .js
 
 const router = Router();
 
@@ -8,7 +8,7 @@ const router = Router();
  * SA-only: one-time initializer
  * - creates franchisees table if missing
  * - seeds from existing referrals
- * - adds FK (NOT VALID → VALIDATE) so historical data is respected
+ * - adds FK (NOT VALID → VALIDATE)
  */
 router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
   const client = await pool.connect();
@@ -31,7 +31,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       ON public.franchisees(active);
     `);
 
-    // Seed from existing referrals
+    -- Seed any missing franchisees from referrals
     await client.query(`
       INSERT INTO public.franchisees (code, name)
       SELECT DISTINCT r.franchisee_code, r.franchisee_code
@@ -40,7 +40,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       WHERE r.franchisee_code IS NOT NULL AND f.code IS NULL;
     `);
 
-    // Add FK if missing (safe, NOT VALID -> VALIDATE)
+    -- Add FK if it doesn't exist yet (safe)
     await client.query(`
       DO $$
       BEGIN
@@ -73,7 +73,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
   }
 });
 
-/** SA-only: create a franchisee */
+/** SA-only: create or upsert a franchisee */
 router.post('/franchisees', requireRole('sa'), async (req, res) => {
   const { code, name, contact_phone, contact_email, active } = req.body || {};
   if (!code || !name) return res.status(400).json({ error: 'code and name are required' });
