@@ -1,3 +1,4 @@
+import franchisees from './routes/franchisees';
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -20,6 +21,7 @@ app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 app.use('/debug', debugRouter);
 app.use('/admin', adminRouter);
+app.use(franchisees);
 app.use('/dbinfo', dbinfoRouter); // <-- add
 
 app.listen(CONFIG.port, () => {
