@@ -1,4 +1,3 @@
-import franchisees from './routes/franchisees';
 import express, { Request, Response } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -9,7 +8,8 @@ import referrals from './routes/referrals.js';
 import exportsRouter from './routes/exports.js';
 import debugRouter from './routes/debug.js';
 import adminRouter from './routes/admin.js';
-import dbinfoRouter from './routes/dbinfo.js'; // <-- add
+import dbinfoRouter from './routes/dbinfo.js';
+import franchisees from './routes/franchisees.js'; // ⬅️ add .js and keep last (order doesn't matter)
 
 const app = express();
 app.use(helmet());
@@ -21,8 +21,8 @@ app.use('/referrals', referrals);
 app.use('/exports', exportsRouter);
 app.use('/debug', debugRouter);
 app.use('/admin', adminRouter);
-app.use(franchisees);
-app.use('/dbinfo', dbinfoRouter); // <-- add
+app.use('/dbinfo', dbinfoRouter);
+app.use(franchisees); // mounts /franchisees and /admin/franchisees/*
 
 app.listen(CONFIG.port, () => {
   console.log(`referrals api listening on :${CONFIG.port}`);
