@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { pool } from '../db.js';            // ⬅️ note the .js
-import { requireRole } from '../auth.js';   // ⬅️ note the .js
+import { pool } from '../db.js';            // keep .js extension
+import { requireRole } from '../auth.js';   // keep .js extension
 
 const router = Router();
 
@@ -31,7 +31,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       ON public.franchisees(active);
     `);
 
-    -- Seed any missing franchisees from referrals
+    // Seed any missing franchisees from referrals
     await client.query(`
       INSERT INTO public.franchisees (code, name)
       SELECT DISTINCT r.franchisee_code, r.franchisee_code
@@ -40,7 +40,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
       WHERE r.franchisee_code IS NOT NULL AND f.code IS NULL;
     `);
 
-    -- Add FK if it doesn't exist yet (safe)
+    // Add FK if it doesn't exist yet (safe)
     await client.query(`
       DO $$
       BEGIN
@@ -48,6 +48,7 @@ router.post('/admin/franchisees/init', requireRole('sa'), async (_req, res) => {
           SELECT 1
           FROM information_schema.table_constraints
           WHERE table_name = 'referrals'
+            AND constraint_type = 'FOREIGN KEY'
             AND constraint_name = 'referrals_franchisee_code_fkey'
         ) THEN
           ALTER TABLE public.referrals
@@ -148,7 +149,8 @@ router.patch('/franchisees/:code', requireRole('sa'), async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `UPDATE public.franchisees SET ${sets.join(', ')} WHERE code = $${i} RETURNING code, name, contact_phone, contact_email, active, created_at`,
+      `UPDATE public.franchisees SET ${sets.join(', ')} WHERE code = $${i}
+       RETURNING code, name, contact_phone, contact_email, active, created_at`,
       [...args, code]
     );
     if (!rows.length) return res.status(404).json({ error: 'not_found' });
