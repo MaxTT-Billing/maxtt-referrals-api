@@ -2,20 +2,18 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { CONFIG } from '../config.js';
 
-// ---- Minimal role guard (header-based) --------------------------------------
+// ---- Minimal role guard (header-based, uses CONFIG.rawKeys) -----------------
 // Accepts X-REF-API-KEY and maps to role. SA >= Admin >= Writer.
 function requireRole(role: 'writer' | 'admin' | 'sa') {
   return (req: any, res: any, next: any) => {
     try {
       const key =
-        req.get('X-REF-API-KEY') ||
-        req.get('x-ref-api-key') ||
-        req.get('X-API-KEY') ||
-        req.get('x-api-key');
+        req.get?.('X-REF-API-KEY') ||
+        req.get?.('x-ref-api-key') ||
+        req.get?.('X-API-KEY') ||
+        req.get?.('x-api-key');
 
-      const sa = CONFIG.saKey;
-      const admin = CONFIG.adminKey;
-      const writer = CONFIG.writerKey;
+      const { writer, admin, sa } = CONFIG.rawKeys || { writer: '', admin: '', sa: '' };
 
       const isSA = !!sa && key === sa;
       const isAdmin = !!admin && key === admin;
@@ -203,7 +201,7 @@ router.get('/franchisees', requireRole('admin'), async (req, res) => {
   }
   if (q && q.trim()) {
     where.push(`(f.code ILIKE $${i} OR f.name ILIKE $${i})`);
-    args.push(`%${q?.replace(/%/g, '')}%`);
+    args.push(`%${q.replace(/%/g, '')}%`);
     i++;
   }
 
