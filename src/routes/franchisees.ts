@@ -1,24 +1,40 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
-import { requireRole as requireRoleRaw } from '../auth.js';
+import { CONFIG } from '../config.js';
 
-// Adapt your requireRole(role, req, res, next) into standard Express middleware
-const requireRole =
-  (role: 'writer' | 'admin' | 'sa') =>
-  (req: any, res: any, next: any) => {
+// ---- Minimal role guard (header-based) --------------------------------------
+// Accepts X-REF-API-KEY and maps to role. SA >= Admin >= Writer.
+function requireRole(role: 'writer' | 'admin' | 'sa') {
+  return (req: any, res: any, next: any) => {
     try {
-      const out = (requireRoleRaw as any)(role, req, res, next);
-      if (out && typeof out.then === 'function') {
-        out.then(() => {/* ok */}).catch((e: any) => {
-          if (!res.headersSent) res.status(403).json({ error: 'forbidden', where: 'auth', message: e?.message || String(e) });
-        });
-      }
+      const key =
+        req.get('X-REF-API-KEY') ||
+        req.get('x-ref-api-key') ||
+        req.get('X-API-KEY') ||
+        req.get('x-api-key');
+
+      const sa = CONFIG.saKey;
+      const admin = CONFIG.adminKey;
+      const writer = CONFIG.writerKey;
+
+      const isSA = !!sa && key === sa;
+      const isAdmin = !!admin && key === admin;
+      const isWriter = !!writer && key === writer;
+
+      const ok =
+        role === 'sa' ? isSA :
+        role === 'admin' ? (isSA || isAdmin) :
+        (isSA || isAdmin || isWriter);
+
+      if (!ok) return res.status(403).json({ error: 'forbidden', where: 'header-auth' });
+      next();
     } catch (e: any) {
-      if (!res.headersSent) res.status(403).json({ error: 'forbidden', where: 'auth-sync', message: e?.message || String(e) });
+      return res.status(403).json({ error: 'forbidden', where: 'header-auth-catch', message: e?.message || String(e) });
     }
   };
+}
 
-// Small helpers
+// ---- Small helpers ----------------------------------------------------------
 async function one<T = any>(sql: string, params?: any[]) {
   const { rows } = await pool.query(sql, params);
   return rows[0] as T;
@@ -32,7 +48,7 @@ const router = Router();
 // Accept any verb so tools that send POST don't show "Cannot POST"
 router.all('/franchisees/ping', (_req, res) => res.json({ ok: true, route: '/franchisees/* ready' }));
 
-// Status: see what's already there (requires SA so it reveals structure)
+// Status: shows table/index/FK presence (SA)
 router.get('/franchisees/status', requireRole('sa'), async (_req, res) => {
   try {
     const t   = await one<{t: string | null}>(`SELECT to_regclass('public.franchisees') AS t`);
@@ -64,7 +80,7 @@ router.get('/franchisees/status', requireRole('sa'), async (_req, res) => {
   }
 });
 
-// ---- Stepwise initializers (each is tiny & idempotent) ----------------------
+// ---- Stepwise initializers (tiny & idempotent) ------------------------------
 
 // 1) Create table
 router.post('/franchisees/init/table', requireRole('sa'), async (_req, res) => {
@@ -146,7 +162,6 @@ router.post('/franchisees/init/fk/validate', requireRole('sa'), async (_req, res
     await run(`ALTER TABLE public.referrals VALIDATE CONSTRAINT referrals_franchisee_code_fkey;`);
     res.json({ ok: true, fk_validated: true });
   } catch (_e: any) {
-    // If validation fails due to existing bad rows, that’s fine for v1
     res.json({ ok: true, fk_validated: false, note: 'kept NOT VALID (can validate later)' });
   }
 });
@@ -188,7 +203,7 @@ router.get('/franchisees', requireRole('admin'), async (req, res) => {
   }
   if (q && q.trim()) {
     where.push(`(f.code ILIKE $${i} OR f.name ILIKE $${i})`);
-    args.push(`%${q.replace(/%/g, '')}%`);
+    args.push(`%${q?.replace(/%/g, '')}%`);
     i++;
   }
 
