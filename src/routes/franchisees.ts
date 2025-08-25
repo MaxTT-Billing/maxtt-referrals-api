@@ -2,29 +2,74 @@ import { Router } from 'express';
 import { pool } from '../db.js';
 import { requireRole as requireRoleRaw } from '../auth.js';
 
-// Adapt your requireRole(role, req, res, next) into standard middleware
+// Adapt your requireRole(role, req, res, next) into standard Express middleware
 const requireRole =
   (role: 'writer' | 'admin' | 'sa') =>
-  (req: any, res: any, next: any) =>
-    (requireRoleRaw as any)(role, req, res, next);
+  (req: any, res: any, next: any) => {
+    try {
+      const out = (requireRoleRaw as any)(role, req, res, next);
+      if (out && typeof out.then === 'function') {
+        out.then(() => {/* ok */}).catch((e: any) => {
+          if (!res.headersSent) res.status(403).json({ error: 'forbidden', where: 'auth', message: e?.message || String(e) });
+        });
+      }
+    } catch (e: any) {
+      if (!res.headersSent) res.status(403).json({ error: 'forbidden', where: 'auth-sync', message: e?.message || String(e) });
+    }
+  };
+
+// Small helpers
+async function one<T = any>(sql: string, params?: any[]) {
+  const { rows } = await pool.query(sql, params);
+  return rows[0] as T;
+}
+async function run(sql: string, params?: any[]) {
+  await pool.query(sql, params);
+}
 
 const router = Router();
 
-// Ping: accept ANY verb to avoid tool defaults showing "Cannot POST"
-router.all('/franchisees/ping', (_req, res) => res.json({ ok: true }));
+// Accept any verb so tools that send POST don't show "Cannot POST"
+router.all('/franchisees/ping', (_req, res) => res.json({ ok: true, route: '/franchisees/* ready' }));
 
-/**
- * SA-only initializer (at /franchisees/init — not under /admin)
- * - ensures table + index
- * - seeds codes from referrals
- * - adds FK as NOT VALID, then attempts VALIDATE (best-effort)
- */
-router.post('/franchisees/init', requireRole('sa'), async (_req, res) => {
-  let fkAdded = false;
-  let fkValidated = false;
-
+// Status: see what's already there (requires SA so it reveals structure)
+router.get('/franchisees/status', requireRole('sa'), async (_req, res) => {
   try {
-    await pool.query(`
+    const t   = await one<{t: string | null}>(`SELECT to_regclass('public.franchisees') AS t`);
+    const idx = await one<{exists: boolean}>(`
+      SELECT EXISTS(
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname='public' AND indexname='idx_franchisees_active'
+      ) AS exists
+    `);
+    const fk  = await one<{exists: boolean, validated: boolean | null}>(`
+      SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='referrals_franchisee_code_fkey') AS exists,
+             (SELECT convalidated FROM pg_constraint WHERE conname='referrals_franchisee_code_fkey') AS validated
+    `);
+    let cnt = 0;
+    if (t?.t) {
+      const c = await one<{n: number}>(`SELECT COUNT(*)::int AS n FROM public.franchisees`);
+      cnt = c?.n ?? 0;
+    }
+    res.json({
+      ok: true,
+      table: !!t?.t,
+      index: !!idx?.exists,
+      fk_present: !!fk?.exists,
+      fk_validated: fk?.validated ?? false,
+      franchisee_count: cnt
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, where: 'status', message: e?.message || String(e) });
+  }
+});
+
+// ---- Stepwise initializers (each is tiny & idempotent) ----------------------
+
+// 1) Create table
+router.post('/franchisees/init/table', requireRole('sa'), async (_req, res) => {
+  try {
+    await run(`
       CREATE TABLE IF NOT EXISTS public.franchisees (
         code           TEXT PRIMARY KEY,
         name           TEXT NOT NULL,
@@ -34,26 +79,51 @@ router.post('/franchisees/init', requireRole('sa'), async (_req, res) => {
         created_at     TIMESTAMPTZ DEFAULT now()
       );
     `);
+    res.json({ ok: true, created_or_exists: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, where: 'init/table', message: e?.message || String(e) });
+  }
+});
 
-    await pool.query(`
+// 2) Create index
+router.post('/franchisees/init/index', requireRole('sa'), async (_req, res) => {
+  try {
+    await run(`
       CREATE INDEX IF NOT EXISTS idx_franchisees_active
       ON public.franchisees(active);
     `);
+    res.json({ ok: true, created_or_exists: true });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, where: 'init/index', message: e?.message || String(e) });
+  }
+});
 
-    await pool.query(`
+// 3) Seed from referrals
+router.post('/franchisees/init/seed', requireRole('sa'), async (_req, res) => {
+  try {
+    const before = await one<{n: number}>(`SELECT COUNT(*)::int AS n FROM public.franchisees`);
+    await run(`
       INSERT INTO public.franchisees (code, name)
       SELECT DISTINCT r.franchisee_code, r.franchisee_code
       FROM public.referrals r
       LEFT JOIN public.franchisees f ON f.code = r.franchisee_code
       WHERE r.franchisee_code IS NOT NULL AND f.code IS NULL;
     `);
+    const after = await one<{n: number}>(`SELECT COUNT(*)::int AS n FROM public.franchisees`);
+    res.json({ ok: true, added: (after?.n ?? 0) - (before?.n ?? 0) });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, where: 'init/seed', message: e?.message || String(e) });
+  }
+});
 
-    const fkCheck = await pool.query(`
-      SELECT 1 FROM pg_constraint WHERE conname = 'referrals_franchisee_code_fkey'
+// 4) Add FK (NOT VALID)
+router.post('/franchisees/init/fk/add', requireRole('sa'), async (_req, res) => {
+  try {
+    const fk = await one<{exists: boolean}>(`
+      SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname='referrals_franchisee_code_fkey') AS exists
     `);
-
-    if (fkCheck.rowCount === 0) {
-      await pool.query(`
+    if (!fk?.exists) {
+      await run(`
         ALTER TABLE public.referrals
           ADD CONSTRAINT referrals_franchisee_code_fkey
           FOREIGN KEY (franchisee_code)
@@ -62,21 +132,26 @@ router.post('/franchisees/init', requireRole('sa'), async (_req, res) => {
           ON DELETE RESTRICT
           NOT VALID;
       `);
-      fkAdded = true;
-
-      try {
-        await pool.query(`ALTER TABLE public.referrals VALIDATE CONSTRAINT referrals_franchisee_code_fkey;`);
-        fkValidated = true;
-      } catch {
-        fkValidated = false;
-      }
+      return res.json({ ok: true, fk_added: true, note: 'NOT VALID' });
     }
-
-    res.json({ ok: true, note: 'franchisees ensured & seeded', fk_added: fkAdded, fk_validated: fkValidated });
+    res.json({ ok: true, fk_added: false, note: 'already present' });
   } catch (e: any) {
-    res.status(500).json({ ok: false, where: 'init', message: e?.message || String(e) });
+    res.status(500).json({ ok: false, where: 'init/fk/add', message: e?.message || String(e) });
   }
 });
+
+// 5) Try validating FK (ok if it can’t)
+router.post('/franchisees/init/fk/validate', requireRole('sa'), async (_req, res) => {
+  try {
+    await run(`ALTER TABLE public.referrals VALIDATE CONSTRAINT referrals_franchisee_code_fkey;`);
+    res.json({ ok: true, fk_validated: true });
+  } catch (_e: any) {
+    // If validation fails due to existing bad rows, that’s fine for v1
+    res.json({ ok: true, fk_validated: false, note: 'kept NOT VALID (can validate later)' });
+  }
+});
+
+// ---- CRUD -------------------------------------------------------------------
 
 /** SA-only: create or upsert a franchisee */
 router.post('/franchisees', requireRole('sa'), async (req, res) => {
@@ -111,7 +186,6 @@ router.get('/franchisees', requireRole('admin'), async (req, res) => {
   if (active === 'true' || active === 'false') {
     where.push(`f.active = $${i++}`); args.push(active === 'true');
   }
-
   if (q && q.trim()) {
     where.push(`(f.code ILIKE $${i} OR f.name ILIKE $${i})`);
     args.push(`%${q.replace(/%/g, '')}%`);
