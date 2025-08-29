@@ -1,104 +1,145 @@
-// src/server.ts
-// Referrals API server (TypeScript, ESM/NodeNext)
-// - Franchisees routes
-// - Referrals routes
-// - CSV exports (invoices + referrals)
-// - Debug/dbinfo/admin
-// - Admin utilities for referrals (delete/find) via referralAdmin
-// - In-memory rate limits
+// src/server.ts — MaxTT Referrals API (TypeScript, ESM)
+// - Public endpoints (HMAC-protected): /api/referrals/validate, /api/referrals/credit
+// - Dev helper: GET /api/referrals/credits
+// - Mounts existing admin routes (src/routes/referralAdmin.ts) if present
+//
+// Env keys (per Render):
+//   PORT (default 11000)
+//   CORS_ALLOWED_ORIGINS (comma-separated)
+//   REF_SIGNING_KEY (TEMP dev value OK; upgrade before prod)
+//   REFERRALS_ENABLED (true/false; default true)
 
-import express, { Request, Response } from 'express';
-import helmet from 'helmet';
-import cors from 'cors';
-import { CONFIG } from './config.js';
-import { ensureKeyHashes } from './auth.js';
-import { ensureSchema } from './schema.js';
+import express, { Request, Response, NextFunction, Router } from "express";
+import crypto from "node:crypto";
 
-import referrals from './routes/referrals.js';
-import exportsRouter from './routes/exports.js';
-import debugRouter from './routes/debug.js';
-import dbinfoRouter from './routes/dbinfo.js';
-import franchisees from './routes/franchisees.js';
-import adminRouter from './routes/admin.js';
-import exportReferrals from './routes/exportReferrals.js';
-import referralAdmin from './routes/referralAdmin.js';
+// ---------- Env ----------
+const PORT = Number(process.env.PORT || 11000);
+const ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "https://maxtt-billing-tools.onrender.com")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+const KEY = String(process.env.REF_SIGNING_KEY || "TS!MAXTT-2025"); // upgrade before prod
+const ENABLED = String(process.env.REFERRALS_ENABLED ?? "true").toLowerCase() !== "false";
 
-import { rateLimit, methodGate, methodsGate } from './rateLimit.js';
-
+// ---------- App ----------
 const app = express();
+app.use(express.json({ limit: "2mb" }));
 
-// trust proxy for correct req.ip on Render
-app.set('trust proxy', 1);
-
-app.use(helmet());
-app.use(express.json());
-app.use(cors({ origin: CONFIG.cors }));
-
-// ---------------- Rate limits ----------------
-// 60 req/min for reads (GET/HEAD)
-const readLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 60,
-  name: 'read',
-  key: (req) => req.ip || 'unknown',
-});
-
-// 10 req/min for POST /referrals
-const postReferralsLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 10,
-  name: 'post_referrals',
-  key: (req) => req.ip || 'unknown',
-});
-
-// 20 req/min for franchisee writes (POST/PATCH under /franchisees)
-const franWritesLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 20,
-  name: 'franchisee_writes',
-  key: (req) => req.ip || 'unknown',
-});
-
-// Apply read limiter only to GET/HEAD
-app.use(methodsGate(['GET', 'HEAD'], readLimiter));
-// Apply write limiters
-app.use('/referrals', methodGate('POST', postReferralsLimiter));
-app.use('/franchisees', methodsGate(['POST', 'PATCH'], franWritesLimiter));
-
-// ---------------- Routes ----------------
-app.get('/health', (_req: Request, res: Response) => res.json({ ok: true }));
-
-// core
-app.use('/referrals', referrals);
-app.use('/exports', exportsRouter);            // other exports (if any)
-app.use('/debug', debugRouter);
-app.use('/dbinfo', dbinfoRouter);
-app.use(franchisees);
-
-// admin (existing)
-app.use('/admin', adminRouter);
-
-// referrals CSV export at /exports/referrals
-app.use(exportReferrals);
-
-// NEW: admin utilities for referrals under /admin/referrals/*
-app.use('/admin', referralAdmin);
-
-// ---------------- Start ----------------
-app.listen(CONFIG.port, () => {
-  console.log(`referrals api listening on :${CONFIG.port}`);
-});
-
-// Initialize schema & auth salts, but do not crash server if they fail
-(async () => {
-  try {
-    await ensureSchema();
-  } catch (e: any) {
-    console.error('ensureSchema failed:', e?.message || e);
+// ---------- CORS allow-list ----------
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin || "";
+  if (ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
   }
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-REF-SIG");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
+// ---------- HMAC verify ----------
+function verifyHmac(body: unknown, sigHeader?: string): boolean {
+  if (!sigHeader || !sigHeader.startsWith("sha256=")) return false;
+  const sigHex = sigHeader.slice(7);
+  const mac = crypto.createHmac("sha256", KEY);
+  mac.update(JSON.stringify(body));
+  const expected = mac.digest("hex");
   try {
-    await ensureKeyHashes();
-  } catch (e: any) {
-    console.warn('ensureKeyHashes skipped:', e?.message || e);
+    return crypto.timingSafeEqual(Buffer.from(sigHex, "hex"), Buffer.from(expected, "hex"));
+  } catch {
+    return false;
   }
-})();
+}
+
+// ---------- Health ----------
+app.get("/", (_req, res) => res.send("MaxTT Referrals API is running"));
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+// ---------- In-memory ledger (dev-only; replace with DB later) ----------
+type Credit = {
+  id: number;
+  invoiceId: number | string;
+  customerCode: string;
+  refCode: string;
+  subtotal: number;
+  gst: number;
+  litres: number;
+  createdAt: string;
+  ts: string;
+};
+const credits: Credit[] = [];
+let seq = 1;
+
+// ---------- Public: Validate ----------
+app.post("/api/referrals/validate", (req, res) => {
+  if (!ENABLED) return res.json({ valid: false, error: "disabled" });
+  if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
+    return res.status(401).json({ valid: false, error: "bad_signature" });
+  }
+
+  const code = String((req.body as any)?.code || "").trim();
+  // DEV acceptance rule (swap for DB lookup later)
+  const valid = /^[A-Z0-9-]{6,}$/.test(code) && (code.startsWith("MAXTT-") || code.startsWith("TS-"));
+  const ownerName = valid ? "Registered Customer" : undefined;
+
+  res.json({ valid, ownerName });
+});
+
+// ---------- Public: Credit ----------
+app.post("/api/referrals/credit", (req, res) => {
+  if (!ENABLED) return res.status(503).json({ ok: false, error: "disabled" });
+  if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
+    return res.status(401).json({ ok: false, error: "bad_signature" });
+  }
+
+  const body = req.body as any;
+  const invoiceId = body.invoiceId;
+  const customerCode = String(body.customerCode || "");
+  const refCode = String(body.refCode || "");
+  if (!invoiceId || !customerCode || !refCode) {
+    return res.status(400).json({ ok: false, error: "missing_fields" });
+  }
+
+  const rec: Credit = {
+    id: seq++,
+    invoiceId,
+    customerCode,
+    refCode,
+    subtotal: Number(body.subtotal || 0) || 0,
+    gst: Number(body.gst || 0) || 0,
+    litres: Number(body.litres || 0) || 0,
+    createdAt: String(body.createdAt || new Date().toISOString()),
+    ts: new Date().toISOString(),
+  };
+  credits.push(rec);
+
+  res.json({ ok: true, creditId: rec.id });
+});
+
+// ---------- Dev-only: list credits ----------
+app.get("/api/referrals/credits", (_req, res) => {
+  res.json({ ok: true, count: credits.length, data: credits });
+});
+
+// ---------- Mount existing Admin routes (if present) ----------
+try {
+  // Expect default export = Router
+  // Path matches your existing structure: src/routes/referralAdmin.ts
+  // If you rename the file later, update this import.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const adminRouter: Router = require("./routes/referralAdmin").default;
+  if (adminRouter) {
+    app.use("/api/admin", adminRouter);
+  }
+} catch {
+  // Admin router not present; ignore
+}
+
+// ---------- 404 ----------
+app.use((_req, res) => res.status(404).json({ error: "not_found" }));
+
+// ---------- Start ----------
+app.listen(PORT, () => {
+  console.log(`Referrals API listening on :${PORT}`);
+});
