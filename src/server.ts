@@ -1,10 +1,11 @@
 // src/server.ts — MaxTT Referrals API (TypeScript, ESM)
+
 import express, { Request, Response, NextFunction, Router } from "express";
 import crypto from "node:crypto";
 
-// IMPORTANT: extensionless imports for TS/ESM compatibility across build targets
-import creditsRouter from "./routes/credits";
-import { addCredit } from "./store/credits";
+// NOTE: node16/nodenext requires explicit .js in TS ESM imports
+import creditsRouter from "./routes/credits.js";
+import { addCredit } from "./store/credits.js";
 
 const PORT = Number(process.env.PORT || 11000);
 const ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "https://maxtt-billing-tools.onrender.com")
@@ -15,7 +16,7 @@ const ENABLED = String(process.env.REFERRALS_ENABLED ?? "true").toLowerCase() !=
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// CORS allow-list
+// CORS
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin || "";
   if (ORIGINS.includes(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
@@ -26,7 +27,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// HMAC verify
+// HMAC
 function verifyHmac(body: unknown, sigHeader?: string): boolean {
   if (!sigHeader || !sigHeader.startsWith("sha256=")) return false;
   const sigHex = sigHeader.slice(7);
@@ -41,7 +42,7 @@ function verifyHmac(body: unknown, sigHeader?: string): boolean {
 app.get("/", (_req, res) => res.send("MaxTT Referrals API is running"));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Validate (HMAC)
+// Validate
 app.post("/api/referrals/validate", (req, res) => {
   if (!ENABLED) return res.json({ valid: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
@@ -53,7 +54,7 @@ app.post("/api/referrals/validate", (req, res) => {
   res.json({ valid, ownerName });
 });
 
-// Credit (HMAC)
+// Credit
 app.post("/api/referrals/credit", (req, res) => {
   if (!ENABLED) return res.status(503).json({ ok: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
@@ -78,10 +79,10 @@ app.post("/api/referrals/credit", (req, res) => {
   res.json({ ok: true, creditId: rec.id });
 });
 
-// Credits list (no auth) — mounted router
+// Credits list
 app.use(creditsRouter);
 
-// Optional admin mounting
+// Optional admin
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const adminRouter: Router = require("./routes/referralAdmin").default;
