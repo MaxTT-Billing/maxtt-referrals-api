@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
-import { listCredits } from "../store/credits";
+// NOTE: node16/nodenext requires explicit .js in TS ESM imports
+import { listCredits } from "../store/credits.js";
 
 const router = Router();
 
