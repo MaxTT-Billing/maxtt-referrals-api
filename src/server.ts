@@ -1,11 +1,9 @@
-// src/server.ts — MaxTT Referrals API (TypeScript, ESM)
-
+// src/server.ts — Referrals API (TS/ESM) with DB-backed credits
 import express, { Request, Response, NextFunction, Router } from "express";
 import crypto from "node:crypto";
 
-// NOTE: node16/nodenext requires explicit .js in TS ESM imports
 import creditsRouter from "./routes/credits.js";
-import { addCredit } from "./store/credits.js";
+import { addCredit, initCredits } from "./store/credits.js";
 
 const PORT = Number(process.env.PORT || 11000);
 const ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "https://maxtt-billing-tools.onrender.com")
@@ -27,7 +25,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// HMAC
 function verifyHmac(body: unknown, sigHeader?: string): boolean {
   if (!sigHeader || !sigHeader.startsWith("sha256=")) return false;
   const sigHex = sigHeader.slice(7);
@@ -42,7 +39,7 @@ function verifyHmac(body: unknown, sigHeader?: string): boolean {
 app.get("/", (_req, res) => res.send("MaxTT Referrals API is running"));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Validate
+// Validate (HMAC)
 app.post("/api/referrals/validate", (req, res) => {
   if (!ENABLED) return res.json({ valid: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
@@ -54,8 +51,8 @@ app.post("/api/referrals/validate", (req, res) => {
   res.json({ valid, ownerName });
 });
 
-// Credit
-app.post("/api/referrals/credit", (req, res) => {
+// Credit (HMAC) — persists to DB
+app.post("/api/referrals/credit", async (req, res) => {
   if (!ENABLED) return res.status(503).json({ ok: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
     return res.status(401).json({ ok: false, error: "bad_signature" });
@@ -67,7 +64,7 @@ app.post("/api/referrals/credit", (req, res) => {
   if (!invoiceId || !customerCode || !refCode) {
     return res.status(400).json({ ok: false, error: "missing_fields" });
   }
-  const rec = addCredit({
+  const rec = await addCredit({
     invoiceId,
     customerCode,
     refCode,
@@ -92,6 +89,13 @@ try {
 // 404
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 
-app.listen(PORT, () => {
-  console.log(`Referrals API listening on :${PORT}`);
-});
+// Boot
+(async () => {
+  try {
+    await initCredits();
+    app.listen(PORT, () => console.log(`Referrals API listening on :${PORT}`));
+  } catch (e) {
+    console.error("Boot failed:", e);
+    process.exit(1);
+  }
+})();
