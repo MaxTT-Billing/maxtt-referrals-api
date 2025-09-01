@@ -1,7 +1,7 @@
 // src/server.ts — MaxTT Referrals API (TypeScript, ESM)
 // - Public endpoints (HMAC-protected): /api/referrals/validate, /api/referrals/credit
-// - Dev helper: GET /api/referrals/credits
-// - Mounts existing admin routes (src/routes/referralAdmin.ts) if present
+// - Public list (CORS-restricted):     /api/referrals/credits  (filters supported)
+// - Mounts existing admin routes if present
 //
 // Env keys (per Render):
 //   PORT (default 11000)
@@ -11,6 +11,8 @@
 
 import express, { Request, Response, NextFunction, Router } from "express";
 import crypto from "node:crypto";
+import creditsRouter from "./routes/credits.js";
+import { addCredit } from "./store/credits.js";
 
 // ---------- Env ----------
 const PORT = Number(process.env.PORT || 11000);
@@ -28,9 +30,7 @@ app.use(express.json({ limit: "2mb" }));
 // ---------- CORS allow-list ----------
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin || "";
-  if (ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
+  if (ORIGINS.includes(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-REF-SIG");
@@ -55,21 +55,6 @@ function verifyHmac(body: unknown, sigHeader?: string): boolean {
 // ---------- Health ----------
 app.get("/", (_req, res) => res.send("MaxTT Referrals API is running"));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-// ---------- In-memory ledger (dev-only; replace with DB later) ----------
-type Credit = {
-  id: number;
-  invoiceId: number | string;
-  customerCode: string;
-  refCode: string;
-  subtotal: number;
-  gst: number;
-  litres: number;
-  createdAt: string;
-  ts: string;
-};
-const credits: Credit[] = [];
-let seq = 1;
 
 // ---------- Public: Validate ----------
 app.post("/api/referrals/validate", (req, res) => {
@@ -97,12 +82,12 @@ app.post("/api/referrals/credit", (req, res) => {
   const invoiceId = body.invoiceId;
   const customerCode = String(body.customerCode || "");
   const refCode = String(body.refCode || "");
+
   if (!invoiceId || !customerCode || !refCode) {
     return res.status(400).json({ ok: false, error: "missing_fields" });
   }
 
-  const rec: Credit = {
-    id: seq++,
+  const rec = addCredit({
     invoiceId,
     customerCode,
     refCode,
@@ -110,28 +95,19 @@ app.post("/api/referrals/credit", (req, res) => {
     gst: Number(body.gst || 0) || 0,
     litres: Number(body.litres || 0) || 0,
     createdAt: String(body.createdAt || new Date().toISOString()),
-    ts: new Date().toISOString(),
-  };
-  credits.push(rec);
+  });
 
   res.json({ ok: true, creditId: rec.id });
 });
 
-// ---------- Dev-only: list credits ----------
-app.get("/api/referrals/credits", (_req, res) => {
-  res.json({ ok: true, count: credits.length, data: credits });
-});
+// ---------- Public: Credits list (filters) ----------
+app.use(creditsRouter);
 
 // ---------- Mount existing Admin routes (if present) ----------
 try {
-  // Expect default export = Router
-  // Path matches your existing structure: src/routes/referralAdmin.ts
-  // If you rename the file later, update this import.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const adminRouter: Router = require("./routes/referralAdmin").default;
-  if (adminRouter) {
-    app.use("/api/admin", adminRouter);
-  }
+  if (adminRouter) app.use("/api/admin", adminRouter);
 } catch {
   // Admin router not present; ignore
 }
