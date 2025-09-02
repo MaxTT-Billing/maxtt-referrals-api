@@ -1,4 +1,4 @@
-// src/db.ts — Postgres pool helper (TS/ESM, node16 moduleResolution)
+// src/db.ts — Postgres pool helper (TS/ESM, Node 20 / nodenext)
 import pkg from "pg";
 const { Pool } = pkg;
 
@@ -12,12 +12,15 @@ export function getPool() {
   }
   _pool = new Pool({
     connectionString,
-    ssl: connectionString.includes("render.com")
+    ssl: connectionString && /render\.com|neon\.tech|amazonaws\.com/i.test(connectionString)
       ? { rejectUnauthorized: false }
       : undefined,
   });
   return _pool;
 }
+
+/** Compatibility export for existing modules that import { pool } from "./db.js" */
+export const pool = getPool();
 
 export async function query<T = any>(sql: string, params: any[] = []) {
   const p = getPool();
