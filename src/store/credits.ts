@@ -1,7 +1,7 @@
-import { Pool } from "pg";
-import { getPool } from "../db.js";
+// src/store/credits.ts — DB-backed credits store (TS/ESM)
+import { getPool, query } from "../db.js";
 
-export type CreditRow = {
+export type Credit = {
   id: number;
   invoiceId: string;
   customerCode: string;
@@ -9,44 +9,30 @@ export type CreditRow = {
   subtotal: string; // NUMERIC as string
   gst: string;      // NUMERIC as string
   litres: string;   // NUMERIC as string
-  createdAt: string; // ISO string
-  ts: string;        // ISO string
+  createdAt: string; // ISO
+  ts: string;        // ISO
 };
 
-type ListOpts = {
+type ListFilter = {
   refCode?: string;
   customerCode?: string;
   from?: Date; // inclusive
   to?: Date;   // exclusive
 };
 
-function whereSql(opts: ListOpts) {
-  const parts: string[] = [];
-  const args: any[] = [];
-  let i = 1;
-
-  if (opts.refCode) { parts.push(`ref_code = $${i++}`); args.push(opts.refCode); }
-  if (opts.customerCode) { parts.push(`customer_code = $${i++}`); args.push(opts.customerCode); }
-  if (opts.from) { parts.push(`created_at >= $${i++}`); args.push(opts.from.toISOString()); }
-  if (opts.to)   { parts.push(`created_at <  $${i++}`); args.push(opts.to.toISOString()); }
-
-  const where = parts.length ? `WHERE ${parts.join(" AND ")}` : "";
-  return { where, args };
-}
-
-export async function initCredits(pool?: Pool) {
-  const p = pool || getPool();
+export async function initCredits() {
+  const p = getPool();
   await p.query(`
     CREATE TABLE IF NOT EXISTS public.referral_credits (
-      id            SERIAL PRIMARY KEY,
-      invoice_id    TEXT NOT NULL,
-      customer_code TEXT NOT NULL,
-      ref_code      TEXT NOT NULL,
-      subtotal      NUMERIC(12,2) NOT NULL DEFAULT 0,
-      gst           NUMERIC(12,2) NOT NULL DEFAULT 0,
-      litres        NUMERIC(12,3) NOT NULL DEFAULT 0,
-      created_at    TIMESTAMPTZ   NOT NULL,
-      ts            TIMESTAMPTZ   NOT NULL DEFAULT now()
+      id              SERIAL PRIMARY KEY,
+      invoice_id      TEXT NOT NULL,
+      customer_code   TEXT NOT NULL,
+      ref_code        TEXT NOT NULL,
+      subtotal        NUMERIC(12,2) NOT NULL DEFAULT 0,
+      gst             NUMERIC(12,2) NOT NULL DEFAULT 0,
+      litres          NUMERIC(12,3) NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL,
+      ts              TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS ix_refcred_cust ON public.referral_credits (customer_code);
     CREATE INDEX IF NOT EXISTS ix_refcred_ref  ON public.referral_credits (ref_code);
@@ -54,56 +40,84 @@ export async function initCredits(pool?: Pool) {
   `);
 }
 
-export async function saveCredit(row: {
-  invoiceId: string;
+export async function addCredit(rec: {
+  invoiceId: string | number;
   customerCode: string;
   refCode: string;
   subtotal: number;
   gst: number;
   litres: number;
-  createdAt: Date;
-}) {
+  createdAt: string | Date;
+}): Promise<Credit> {
   const p = getPool();
-  await initCredits(p);
-  await p.query(
-    `INSERT INTO public.referral_credits
-     (invoice_id, customer_code, ref_code, subtotal, gst, litres, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [
-      row.invoiceId,
-      row.customerCode,
-      row.refCode,
-      row.subtotal,
-      row.gst,
-      row.litres,
-      row.createdAt.toISOString()
-    ]
-  );
+  await initCredits();
+  const createdIso =
+    rec.createdAt instanceof Date
+      ? rec.createdAt.toISOString()
+      : new Date(rec.createdAt || new Date()).toISOString();
+
+  const sql = `
+    INSERT INTO public.referral_credits
+      (invoice_id, customer_code, ref_code, subtotal, gst, litres, created_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    RETURNING
+      id,
+      invoice_id     AS "invoiceId",
+      customer_code  AS "customerCode",
+      ref_code       AS "refCode",
+      subtotal::text AS "subtotal",
+      gst::text      AS "gst",
+      litres::text   AS "litres",
+      created_at     AS "createdAt",
+      ts
+  `;
+  const args = [
+    String(rec.invoiceId),
+    rec.customerCode,
+    rec.refCode,
+    Number(rec.subtotal) || 0,
+    Number(rec.gst) || 0,
+    Number(rec.litres) || 0,
+    createdIso,
+  ];
+  const r = await p.query(sql, args);
+  const row = r.rows[0] as any;
+  return {
+    ...row,
+    createdAt: new Date(row.createdAt).toISOString(),
+    ts: new Date(row.ts).toISOString(),
+  };
 }
 
-export async function listCredits(opts: ListOpts = {}): Promise<CreditRow[]> {
-  const p = getPool();
-  await initCredits(p);
-  const { where, args } = whereSql(opts);
+export async function listCredits(filter: ListFilter = {}): Promise<Credit[]> {
+  await initCredits();
+  const where: string[] = [];
+  const args: any[] = [];
+  let i = 1;
+
+  if (filter.refCode) { where.push(`ref_code = $${i++}`); args.push(filter.refCode); }
+  if (filter.customerCode) { where.push(`customer_code = $${i++}`); args.push(filter.customerCode); }
+  if (filter.from) { where.push(`created_at >= $${i++}`); args.push(filter.from.toISOString()); }
+  if (filter.to)   { where.push(`created_at <  $${i++}`); args.push(filter.to.toISOString()); }
+
   const sql = `
     SELECT
       id,
-      invoice_id   AS "invoiceId",
-      customer_code AS "customerCode",
-      ref_code      AS "refCode",
+      invoice_id     AS "invoiceId",
+      customer_code  AS "customerCode",
+      ref_code       AS "refCode",
       subtotal::text AS "subtotal",
       gst::text      AS "gst",
       litres::text   AS "litres",
       created_at     AS "createdAt",
       ts
     FROM public.referral_credits
-    ${where}
+    ${where.length ? "WHERE " + where.join(" AND ") : ""}
     ORDER BY created_at DESC, id DESC
     LIMIT 5000
   `;
-  const r = await p.query(sql, args);
-  // Normalize to ISO strings
-  return r.rows.map((x) => ({
+  const r = await query<any>(sql, args);
+  return r.rows.map((x: any) => ({
     ...x,
     createdAt: new Date(x.createdAt).toISOString(),
     ts: new Date(x.ts).toISOString(),
