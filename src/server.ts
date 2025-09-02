@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import creditsRouter from "./routes/credits.js";
 import { addCredit, initCredits } from "./store/credits.js";
 
-const PORT = Number(process.env.PORT || 11000);
+const PORT = Number(process.env.PORT || 10000);
 const ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "https://maxtt-billing-tools.onrender.com")
   .split(",").map(s => s.trim()).filter(Boolean);
 const KEY = String(process.env.REF_SIGNING_KEY || "TS!MAXTT-2025");
@@ -25,21 +25,25 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// HMAC
 function verifyHmac(body: unknown, sigHeader?: string): boolean {
   if (!sigHeader || !sigHeader.startsWith("sha256=")) return false;
   const sigHex = sigHeader.slice(7);
   const mac = crypto.createHmac("sha256", KEY);
   mac.update(JSON.stringify(body));
   const expected = mac.digest("hex");
-  try { return crypto.timingSafeEqual(Buffer.from(sigHex, "hex"), Buffer.from(expected, "hex")); }
-  catch { return false; }
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sigHex, "hex"), Buffer.from(expected, "hex"));
+  } catch {
+    return false;
+  }
 }
 
 // Health
 app.get("/", (_req, res) => res.send("MaxTT Referrals API is running"));
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-// Validate (HMAC)
+// Validate
 app.post("/api/referrals/validate", (req, res) => {
   if (!ENABLED) return res.json({ valid: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
@@ -51,27 +55,24 @@ app.post("/api/referrals/validate", (req, res) => {
   res.json({ valid, ownerName });
 });
 
-// Credit (HMAC) — persists to DB
+// Credit — persists to DB
 app.post("/api/referrals/credit", async (req, res) => {
   if (!ENABLED) return res.status(503).json({ ok: false, error: "disabled" });
   if (!verifyHmac(req.body, req.get("x-ref-sig") || req.get("X-REF-SIG") || undefined)) {
     return res.status(401).json({ ok: false, error: "bad_signature" });
   }
-  const body = req.body as any;
-  const invoiceId = body.invoiceId;
-  const customerCode = String(body.customerCode || "");
-  const refCode = String(body.refCode || "");
-  if (!invoiceId || !customerCode || !refCode) {
+  const b = req.body as any;
+  if (!b.invoiceId || !b.customerCode || !b.refCode) {
     return res.status(400).json({ ok: false, error: "missing_fields" });
   }
   const rec = await addCredit({
-    invoiceId,
-    customerCode,
-    refCode,
-    subtotal: Number(body.subtotal || 0) || 0,
-    gst: Number(body.gst || 0) || 0,
-    litres: Number(body.litres || 0) || 0,
-    createdAt: String(body.createdAt || new Date().toISOString()),
+    invoiceId: b.invoiceId,
+    customerCode: String(b.customerCode),
+    refCode: String(b.refCode),
+    subtotal: Number(b.subtotal || 0) || 0,
+    gst: Number(b.gst || 0) || 0,
+    litres: Number(b.litres || 0) || 0,
+    createdAt: b.createdAt ? new Date(b.createdAt) : new Date(),
   });
   res.json({ ok: true, creditId: rec.id });
 });
@@ -79,12 +80,12 @@ app.post("/api/referrals/credit", async (req, res) => {
 // Credits list
 app.use(creditsRouter);
 
-// Optional admin
+// Optional admin (if present)
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const adminRouter: Router = require("./routes/referralAdmin").default;
   if (adminRouter) app.use("/api/admin", adminRouter);
-} catch {/* ignore */}
+} catch { /* ignore */ }
 
 // 404
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
