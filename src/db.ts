@@ -1,26 +1,26 @@
-// src/db.ts — Postgres pool (ESM/TS, node16 moduleResolution)
+// src/db.ts — Postgres pool helper (TS/ESM, node16 moduleResolution)
 import pkg from "pg";
 const { Pool } = pkg;
 
-const connectionString = process.env.DATABASE_URL || "";
-if (!connectionString) {
-  console.warn("[referrals-api] DATABASE_URL not set — DB features will fail.");
+let _pool: InstanceType<typeof Pool> | null = null;
+
+export function getPool() {
+  if (_pool) return _pool;
+  const connectionString = process.env.DATABASE_URL || "";
+  if (!connectionString) {
+    console.warn("[referrals-api] DATABASE_URL not set — DB operations will fail.");
+  }
+  _pool = new Pool({
+    connectionString,
+    ssl: connectionString.includes("render.com")
+      ? { rejectUnauthorized: false }
+      : undefined,
+  });
+  return _pool;
 }
 
-export const pool = new Pool({
-  connectionString,
-  ssl: connectionString.includes("render.com")
-    ? { rejectUnauthorized: false }
-    : undefined,
-});
-
-// helper
 export async function query<T = any>(sql: string, params: any[] = []) {
-  const client = await pool.connect();
-  try {
-    const r = await client.query(sql, params);
-    return r as unknown as { rows: T[] };
-  } finally {
-    client.release();
-  }
+  const p = getPool();
+  const r = await p.query(sql, params);
+  return r as unknown as { rows: T[] };
 }
